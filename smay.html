@@ -1,0 +1,1083 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Sampler</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <h2>SAMPLES, MIDI & YOU</h2>
+  <label>Set Name:
+  <input id="projectNameInput" type="text" value="My Set">
+</label>
+<button id="loadProjectBtn">Load Setlist</button>
+<input type="file" id="loadProjectInput" accept=".smayset,.zip" style="display:none;">  
+<button id="saveProject">Save Setlist</button>
+<button style="display:none" id="loadSessionBtn">Load Session</button>
+<input type="file" id="loadSessionInput" accept=".json" style="display:none;">
+  <button style="display:none" id="initAudio">Init Audio</button>
+  <button style="display:none" id="initMIDI">Init MIDI</button>
+  <label style="display:none">Session:
+  <select style="display:none" id="sessionSelect"></select>
+</label>
+<button id="addSessionBtn">+ Song</button>
+<button id="duplicateSessionBtn">Duplicate Song</button>
+<button id="deleteSessionBtn">Delete Song</button>
+ 
+  <script src="engine.js"></script>
+  <script src="session.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<div style="display:flex; gap:20px; align-items:flex-start;">
+  <div style="width:320px;">
+    <h3>Setlist</h3>
+    <div id="songList"></div>
+    <button id="addSongBtn">+ Song</button>
+  </div>
+
+  <div style="flex:1;">
+    <div id="backingTrackPanel"></div>
+    <div id="slotsContainer"><h3>Slots</h3></div>
+    <button id="addSlotBtn">+ Add Slot</button>
+  </div>
+</div>
+  <script>
+
+    const engine = new SamplerEngine();
+    const backingTrackPanel = document.getElementById("backingTrackPanel");
+    const backingPlayer = new Audio();
+    backingPlayer.preload = "auto";
+    let keyboardInput=null;
+    const songList = document.getElementById("songList");
+const addSongBtn = document.getElementById("addSongBtn");
+
+    document.getElementById("initAudio").onclick = async () => {
+      await engine.initAudio();
+
+      const loadedSession = await loadSessionFromFile("sessions/default.json");
+      
+      currentProject = {
+        name: "My Project",
+        sessions: [loadedSession],
+        currentSessionIndex: 0
+      };
+
+      currentSession = currentProject.sessions[0];
+
+      await engine.load(currentSession);
+
+      renderSongList();
+      renderSlots();
+      
+      
+      if (!keyboardInput) {
+        keyboardInput = enableComputerKeyboard(engine, { baseNote: 60 });
+      }
+
+     console.log("Session loaded:", currentSession.name);
+    };
+
+    document.getElementById("initMIDI").onclick = async () => {
+
+      const access = await navigator.requestMIDIAccess();
+
+      for (let input of access.inputs.values()) {
+
+        input.onmidimessage = (e) => {
+
+          const [status, data1, data2] = e.data;
+          const command = status & 0xf0;
+
+          if (command === 0x90 && data2 > 0)
+            engine.playNote(data1, data2);
+
+          else if (command === 0x80 || (command === 0x90 && data2 === 0))
+            engine.stopNote(data1);
+
+          else if (command === 0xE0)
+            engine.setPitchBend((data2 << 7) + data1);
+
+          else if (command === 0xB0 && data1 === 64)
+            engine.handleSustain(data2);
+        };
+      }
+    };
+    
+    let currentProject = {
+      name: "My Project",
+      sessions: [],
+      currentSessionIndex: 0
+    };
+
+    let currentSession = null;
+    let sampleLibrary = {};
+    
+    const sessionSelect = document.getElementById("sessionSelect");
+const addSessionBtn = document.getElementById("addSessionBtn");
+const duplicateSessionBtn = document.getElementById("duplicateSessionBtn");
+const deleteSessionBtn = document.getElementById("deleteSessionBtn");
+    const slotsContainer = document.getElementById("slotsContainer");
+    const addSlotBtn = document.getElementById("addSlotBtn");
+
+    function createSlotUI(slotIndex) {
+      const slot = currentSession.slots[slotIndex];
+      
+      const div = document.createElement("div");
+      div.className = "slot";
+      div.id = "slotBox" + slotIndex;
+
+      div.innerHTML = `
+        <h3>Slot ${slotIndex + 1}</h3>
+        <div class="slot-grid">
+        <label>Name: <input type="text" value="${slot.name}" onchange="currentSession.slots[${slotIndex}].name=this.value"></label>
+        <label>Sample: 
+           ${slot.sample || "Drop sample here"}
+        </label>
+        <select onchange="currentSession.slots[${slotIndex}].playbackMode=this.value">
+          ${["oneshot","loop"].map(s =>
+            `<option value="${s}" ${s===slot.playbackMode?'selected':''}>${s}</option>`
+          ).join("")}
+        </select>
+        <label>Loop Start:
+  <input
+    type="number"
+    min="0"
+    step="0.1"
+    value="${slot.loopStart ?? 0}"
+    onchange="snapLoopStart(${slotIndex}, this)"
+  >
+</label>
+
+<label>Loop End:
+  <input
+    type="number"
+    min="0"
+    step="0.1"
+    value="${slot.loopEnd ?? 0}"
+    onchange="snapLoopEnd(${slotIndex}, this)"
+  >
+</label>
+        <label>Root Note: <input type="number" min="0" max="127" value="${slot.rootNote}" onchange="currentSession.slots[${slotIndex}].rootNote=+this.value"></label>
+        <label>Key Min: <input type="number" min="0" max="127" value="${slot.startKey}" onchange="currentSession.slots[${slotIndex}].startKey=+this.value"></label>
+        <label>Key Max: <input type="number" min="0" max="127" value="${slot.endKey}" onchange="currentSession.slots[${slotIndex}].endKey=+this.value"></label>
+        <label>Velocity Depth: <input type="number" step="0.01" min="-1" max="1" value="${slot.velocityDepth ?? 1}" onchange="currentSession.slots[${slotIndex}].velocityDepth=+this.value"></label>
+        <label>Vel Min: <input type="number" min="0" max="127" value="${slot.velMin}" onchange="currentSession.slots[${slotIndex}].velMin=+this.value"></label>
+        <label>Vel Max: <input type="number" min="0" max="127" value="${slot.velMax}" onchange="currentSession.slots[${slotIndex}].velMax=+this.value"></label>
+        <label>Attack: <input type="number" step="0.01" value="${slot.attack}" onchange="currentSession.slots[${slotIndex}].attack=+this.value"></label>
+        <label>Decay: <input type="number" step="0.01" value="${slot.decay ?? 0}" onchange="currentSession.slots[${slotIndex}].decay=+this.value"></label>
+        <label>Sustain Level: <input type="number" step="0.01" min="0" max="1" value="${slot.sustainLevel ?? 1}" onchange="currentSession.slots[${slotIndex}].sustainLevel=+this.value"></label>
+        <label>Release: <input type="number" step="0.01" value="${slot.release}" onchange="currentSession.slots[${slotIndex}].release=+this.value"></label>
+        <label>Velocity Start Depth: <input type="number" step="0.01" value="${slot.velocityStartDepth}" onchange="currentSession.slots[${slotIndex}].velocityStartDepth=+this.value"></label>
+        <label>Transpose: <input type="number" value="${slot.transpose}" onchange="currentSession.slots[${slotIndex}].transpose=+this.value"></label>
+        <label>Volume: <input type="number" step="0.01" value="${slot.volume}" onchange="currentSession.slots[${slotIndex}].volume=+this.value"></label>
+        <label>Pitchbend: <input type="number" value="${slot.pitchbendRange}" onchange="currentSession.slots[${slotIndex}].pitchbendRange=+this.value"></label>
+        <label>MIDI Delay: <input type="number" value="${slot.midiDelay}" onchange="currentSession.slots[${slotIndex}].midiDelay=+this.value"></label>
+        <label>Vibrato Rate: <input type="number" value="${slot.vibratoRate}" onchange="currentSession.slots[${slotIndex}].vibratoRate=+this.value"></label>
+        <label>Vibrato Depth: <input type="number" value="${slot.vibratoDepth}" onchange="currentSession.slots[${slotIndex}].vibratoDepth=+this.value"></label>
+        <label>Vibrato Mod Depth: <input type="number" value="${slot.vibratoModDepth}" onchange="currentSession.slots[${slotIndex}].vibratoModDepth=+this.value"></label>
+        <label>Vibrato Fade: <input type="number" value="${slot.vibratoFade}" onchange="currentSession.slots[${slotIndex}].vibratoFade=+this.value"></label>
+   
+        <button onclick="removeSlot(${slotIndex})">Delete Slot</button>
+      `;
+      
+        div.ondragover = (e) => e.preventDefault();
+
+        div.ondrop = async (e) => {
+          e.preventDefault();
+
+          const file = e.dataTransfer.files[0];
+          if (!file || !file.name.endsWith(".wav")) return;
+
+          await handleSampleDrop(slotIndex, file);
+        };
+        div.ondragover = (e) => {
+          e.preventDefault();
+          div.style.background = "#ddd";
+        };
+
+        div.ondragleave = () => {
+          div.style.background = "";
+        };
+
+
+      slotsContainer.appendChild(div);
+    }
+
+    async function handleSampleDrop(slotIndex, file) {
+      await ensureAudio();
+      await ensureMIDI();
+
+      const slot = currentSession.slots[slotIndex];
+
+      // hvis sample allerede findes → genbrug
+      if (!sampleLibrary[file.name]) {
+
+        const arrayBuffer = await file.arrayBuffer();
+        const buffer = await engine.audioCtx.decodeAudioData(arrayBuffer);
+
+        sampleLibrary[file.name] = {
+          file,
+          buffer
+        };
+        
+
+        engine.audioCache[file.name] = buffer;
+      }
+
+      // bind til slot
+      slot.sample = file.name;
+      slot.buffer = sampleLibrary[file.name].buffer;
+      if (!slot.loopStart) slot.loopStart = 0;
+        slot.loopEnd = slot.buffer.duration;
+
+      renderSlots();
+    }
+
+
+
+   async function addSlot() {
+        await ensureAudio();
+      await ensureMIDI();
+      if (!currentSession) {
+        console.warn("No current session");
+        return;
+      }
+
+      const newSlot = {
+        name: "Slot " + (currentSession.slots.length + 1),
+        sample: "",
+        playbackMode: "oneshot",
+        loopStart: 0,
+        loopEnd: 1,
+        rootNote: 60,
+        startKey: 0,
+        endKey: 127,
+        velocityDepth:1,
+        velMin: 0,
+        velMax: 127,
+        attack: 0.01,
+        decay: 0,
+        sustainLevel: 1,
+        release: 0.3,
+        transpose: 0,
+        volume: 1,
+        pitchbendRange: 2,
+        midiDelay: 0,
+        vibratoRate: 0,
+        vibratoDepth: 0,
+        vibratoModDepth: 0,
+        vibratoFade: 0,
+        buffer: null
+      };
+
+      // kun load hvis der faktisk er et sample
+      if (newSlot.sample) {
+        newSlot.buffer = await engine.loadSample(
+          newSlot.sample,
+          "samples/" + newSlot.sample
+        );
+      }
+
+      currentSession.slots.push(newSlot);
+      renderSlots();
+    }
+
+    function removeSlot(index) {
+      if (!currentSession || !currentSession.slots) return;
+
+      currentSession.slots.splice(index, 1);
+      renderSlots();
+    }
+
+    function renderSlots() {
+      slotsContainer.innerHTML = "<h3>Slots</h3>";
+
+      if (!currentSession || !currentSession.slots) return;
+
+      currentSession.slots.forEach((_, i) => createSlotUI(i));
+    }
+
+    // initial render
+    //renderSlots();
+    addSlotBtn.onclick = addSlot;
+
+    const projectNameInput = document.getElementById("projectNameInput");
+    if (projectNameInput) {
+      projectNameInput.oninput = () => {
+        currentProject.name = projectNameInput.value;
+      };
+    }
+
+
+    document.getElementById("saveProject").onclick = saveProject;
+
+async function saveProject() {
+  if (!currentProject || !currentProject.sessions.length) {
+    console.error("No project to save");
+    return;
+  }
+
+  const zip = new JSZip();
+
+  const cleanProject = JSON.parse(JSON.stringify({
+    name: currentProject.name || "My Set",
+    currentSessionIndex: currentProject.currentSessionIndex || 0,
+    sessions: currentProject.sessions
+  }));
+
+  // fjern runtime-data
+  cleanProject.sessions.forEach(session => {
+    session.slots.forEach(slot => {
+      delete slot.buffer;
+    });
+
+    if (session.backingTrack) {
+      delete session.backingTrack.file;
+      delete session.backingTrack.url;
+    }
+  });
+
+  zip.file("project.json", JSON.stringify(cleanProject, null, 2));
+
+  // samples
+  for (const sampleName in sampleLibrary) {
+    const entry = sampleLibrary[sampleName];
+    if (entry?.file) {
+      zip.file(`samples/${sampleName}`, entry.file);
+    }
+  }
+
+  // backingtracks
+  for (const session of currentProject.sessions) {
+    const bt = session.backingTrack;
+    if (bt?.file && bt.fileName) {
+      zip.file(`backingtracks/${bt.fileName}`, bt.file);
+    }
+  }
+
+  const blob = await zip.generateAsync({ type: "blob" });
+
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${cleanProject.name || "set"}.smayset`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+    const loadInput = document.getElementById("loadSessionInput");
+
+document.getElementById("loadSessionBtn").onclick = () => {
+      
+  loadInput.click();
+};
+
+loadInput.onchange = async (e) => {
+  await ensureAudio();
+  await ensureMIDI();
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const text = await file.text();
+  const session = JSON.parse(text);
+  if (!session.backingTrack) {
+  session.backingTrack = {
+    fileName: "",
+    volume: 1,
+    file: null,
+    url: ""
+  };
+}
+
+  session.slots.forEach(slot => {
+    delete slot.buffer;
+  });
+
+  currentProject.sessions.push(session);
+  await selectSong(currentProject.currentSessionIndex);
+
+  console.log("Session loaded from file");
+};
+
+function createEmptySession(name = "New Song") {
+  return {
+    name,
+    slots: [],
+    backingTrack: {
+      fileName: "",
+      volume: 1,
+      file: null,
+      url: ""
+    }
+  };
+}
+
+async function selectSession(index) {
+  currentProject.currentSessionIndex = index;
+  currentSession = currentProject.sessions[index];
+
+  await engine.load(currentSession);
+  
+  renderSongList();
+  renderSlots();
+}
+
+function renderSessionList() {
+  sessionSelect.innerHTML = currentProject.sessions
+    .map((session, i) =>
+      `<option value="${i}" ${i === currentProject.currentSessionIndex ? "selected" : ""}>${session.name || "Session " + (i + 1)}</option>`
+    )
+    .join("");
+}
+
+async function addSession() {
+  const sessionName = "Session " + (currentProject.sessions.length + 1);
+  currentProject.sessions.push(createEmptySession(sessionName));
+  await selectSession(currentProject.sessions.length - 1);
+}
+
+async function duplicateCurrentSession() {
+  if (!currentSession) return;
+
+  const copy = JSON.parse(JSON.stringify(currentSession));
+  copy.name = (copy.name || "Session") + " Copy";
+
+  // buffers skal genskabes via engine.load
+  copy.slots.forEach(slot => {
+    delete slot.buffer;
+  });
+
+  currentProject.sessions.push(copy);
+  await selectSession(currentProject.sessions.length - 1);
+}
+
+async function deleteCurrentSession() {
+  if (currentProject.sessions.length <= 1) return;
+
+  currentProject.sessions.splice(currentProject.currentSessionIndex, 1);
+
+  const newIndex = Math.max(0, currentProject.currentSessionIndex - 1);
+  await selectSession(newIndex);
+}
+
+addSongBtn.onclick = addSong;
+
+const loadProjectBtn = document.getElementById("loadProjectBtn");
+const loadProjectInput = document.getElementById("loadProjectInput");
+
+loadProjectBtn.onclick = () => {
+  
+  loadProjectInput.click();
+};
+
+loadProjectInput.onchange = async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  await loadProject(file);
+};
+
+async function loadProject(file) {
+  if (!engine.audioCtx) {
+    await engine.initAudio();
+  }
+  await ensureAudio();
+      await ensureMIDI();
+
+  const zip = await JSZip.loadAsync(file);
+
+  const projectFile = zip.file("project.json");
+  if (!projectFile) {
+    console.error("project.json not found in zip");
+    return;
+  }
+
+  const projectText = await projectFile.async("string");
+  const loadedProject = JSON.parse(projectText);
+
+  // nulstil library
+  sampleLibrary = {};
+  engine.audioCache = {};
+
+  // load samples
+  const sampleFolder = zip.folder("samples");
+  if (sampleFolder) {
+    const sampleEntries = Object.keys(sampleFolder.files);
+
+    for (const path of sampleEntries) {
+      const zipEntry = sampleFolder.files[path];
+      if (zipEntry.dir) continue;
+
+      const fileName = path.split("/").pop();
+      if (!fileName) continue;
+
+      try {
+        const arrayBuffer = await zipEntry.async("arraybuffer");
+        const decodeBuffer = arrayBuffer.slice(0);
+        const audioBuffer = await engine.audioCtx.decodeAudioData(decodeBuffer);
+        const blob = new Blob([arrayBuffer]);
+
+        sampleLibrary[fileName] = {
+          file: blob,
+          buffer: audioBuffer
+        };
+
+        engine.audioCache[fileName] = audioBuffer;
+      } catch (err) {
+        console.error("Could not decode sample:", fileName, err);
+      }
+    }
+  }
+
+  // load backingtracks
+  const backingFolder = zip.folder("backingtracks");
+  const backingTrackFiles = {};
+
+  if (backingFolder) {
+    const backingEntries = Object.keys(backingFolder.files);
+
+    for (const path of backingEntries) {
+      const zipEntry = backingFolder.files[path];
+      if (zipEntry.dir) continue;
+
+      const fileName = path.split("/").pop();
+      if (!fileName) continue;
+
+      const blob = await zipEntry.async("blob");
+
+      backingTrackFiles[fileName] = {
+        file: blob,
+        url: URL.createObjectURL(blob)
+      };
+    }
+  }
+
+  // bind samples + backingtracks tilbage
+  loadedProject.sessions.forEach(session => {
+    session.slots.forEach(slot => {
+      slot.buffer = sampleLibrary[slot.sample]?.buffer || null;
+    });
+
+    if (!session.backingTrack) {
+      session.backingTrack = {
+        fileName: "",
+        volume: 1,
+        file: null,
+        url: ""
+      };
+    } else {
+      const fileName = session.backingTrack.fileName;
+      if (fileName && backingTrackFiles[fileName]) {
+        session.backingTrack.file = backingTrackFiles[fileName].file;
+        session.backingTrack.url = backingTrackFiles[fileName].url;
+      } else {
+        session.backingTrack.file = null;
+        session.backingTrack.url = "";
+      }
+    }
+  });
+
+  currentProject = {
+    name: loadedProject.name || "Loaded Set",
+    sessions: loadedProject.sessions || [],
+    currentSessionIndex: loadedProject.currentSessionIndex || 0
+  };
+
+  currentSession =
+    currentProject.sessions[currentProject.currentSessionIndex] ||
+    currentProject.sessions[0] ||
+    null;
+
+  if (currentSession) {
+    await engine.load(currentSession);
+    loadBackingTrackForCurrentSong();
+  }
+
+  renderSongList();
+  renderBackingTrackPanel();
+  renderSlots();
+
+  console.log("Project loaded:", currentProject.name);
+}
+
+  function enableComputerKeyboard(engine, options = {}) {
+  let baseNote = options.baseNote ?? 60;
+  const target = options.target ?? window;
+
+  const keyMap = {
+    z: 0, s: 1, x: 2, d: 3, c: 4,
+    v: 5, g: 6, b: 7, h: 8, n: 9,
+    j: 10, m: 11, ",": 12,
+
+    q: 12, "2": 13, w: 14, "3": 15,
+    e: 16, r: 17, "5": 18, t: 19,
+    "6": 20, y: 21, "7": 22, u: 23
+  };
+
+  const heldKeys = new Set();
+
+  // 🎛 pitchbend state
+  let pitchBend = 8192; // center
+  const bendStep = 512; // hvor hurtigt den bevæger sig
+
+  function sendPitchBend() {
+    engine.setPitchBend(pitchBend);
+  }
+
+  function onKeyDown(e) {
+    const key = e.key.toLowerCase();
+
+    // 🎹 note input
+    if (key in keyMap) {
+      if (e.repeat) return;
+      if (heldKeys.has(key)) return;
+
+      heldKeys.add(key);
+
+      const note = baseNote + keyMap[key];
+      const velocity = e.shiftKey ? 127 : 80;
+      engine.playNote(note, velocity);
+      //engine.playNote(note, 100);
+
+      //e.preventDefault();
+      return;
+    }
+
+    // 🔼 oktav op
+    if (key === "]") {
+      baseNote += 12;
+      console.log("Octave:", baseNote);
+      return;
+    }
+
+    // 🔽 oktav ned
+    if (key === "[") {
+      baseNote -= 12;
+      console.log("Octave:", baseNote);
+      return;
+    }
+
+    // 🎛 pitchbend højre
+    if (e.key === "ArrowRight") {
+      pitchBend = Math.min(16383, pitchBend + bendStep);
+      sendPitchBend();
+      return;
+    }
+
+    // 🎛 pitchbend venstre
+    if (e.key === "ArrowLeft") {
+      pitchBend = Math.max(0, pitchBend - bendStep);
+      sendPitchBend();
+      return;
+    }
+  }
+
+  function onKeyUp(e) {
+    const key = e.key.toLowerCase();
+
+    // 🎹 note release
+    if (key in keyMap) {
+      heldKeys.delete(key);
+
+      const note = baseNote + keyMap[key];
+      engine.stopNote(note);
+
+      e.preventDefault();
+      return;
+    }
+
+    // 🎛 reset pitchbend når man slipper
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      pitchBend = 8192;
+      sendPitchBend();
+    }
+  }
+
+  target.addEventListener("keydown", onKeyDown);
+  target.addEventListener("keyup", onKeyUp);
+
+  return {
+    destroy() {
+      target.removeEventListener("keydown", onKeyDown);
+      target.removeEventListener("keyup", onKeyUp);
+    }
+  };
+}
+
+  function removeSlot(index) {
+    if (!currentSession || !currentSession.slots) return;
+
+    currentSession.slots.splice(index, 1);
+    renderSlots();
+
+    
+  }
+
+  let midiInitialized = false;
+
+async function ensureMIDI() {
+    if (midiInitialized) return;
+
+    const access = await navigator.requestMIDIAccess();
+
+    for (let input of access.inputs.values()) {
+      input.onmidimessage = (e) => {
+        const [status, data1, data2] = e.data;
+        const command = status & 0xf0;
+
+        if (command === 0x90 && data2 > 0)
+          engine.playNote(data1, data2);
+        else if (command === 0x80 || (command === 0x90 && data2 === 0))
+          engine.stopNote(data1);
+        else if (command === 0xE0)
+          engine.setPitchBend((data2 << 7) + data1);
+        else if (command === 0xB0 && data1 === 64)
+          engine.handleSustain(data2);
+      };
+    }
+
+    midiInitialized = true;
+  }
+
+  async function ensureAudio() {
+    if (!engine.audioCtx) {
+      await engine.initAudio();
+    }
+    if (!keyboardInput) {
+        keyboardInput = enableComputerKeyboard(engine, { baseNote: 60 });
+      }
+  }
+
+  function createEmptySession(name = "New Song") {
+  return {
+    name,
+    slots: []
+  };
+}
+
+function renderSongList() {
+  if (!currentProject || !currentProject.sessions) {
+    songList.innerHTML = "";
+    return;
+  }
+
+  songList.innerHTML = currentProject.sessions.map((song, index) => `
+    <div style="
+      border:1px solid #999;
+      padding:8px;
+      margin-bottom:8px;
+      background:${index === currentProject.currentSessionIndex ? "#ddd" : "#f5f5f5"};
+    ">
+      <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+        <button onclick="selectSong(${index})">▶</button>
+        <input
+          type="text"
+          value="${song.name || "Song " + (index + 1)}"
+          onchange="renameSong(${index}, this.value)"
+          style="flex:1; min-width:120px;"
+        >
+      </div>
+
+      <div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap;">
+        <button onclick="moveSongUp(${index})">↑</button>
+        <button onclick="moveSongDown(${index})">↓</button>
+        <button onclick="duplicateSong(${index})">Duplicate</button>
+        <button onclick="deleteSong(${index})">Delete</button>
+      </div>
+    </div>
+  `).join("");
+}
+
+async function selectSong(index) {
+  currentProject.currentSessionIndex = index;
+  currentSession = currentProject.sessions[index];
+
+  await engine.load(currentSession);
+  
+  loadBackingTrackForCurrentSong();
+  renderSongList();
+  renderBackingTrackPanel();
+  renderSlots();
+}
+
+function renameSong(index, name) {
+  currentProject.sessions[index].name = name;
+  renderSongList();
+}
+
+async function moveSongUp(index) {
+  if (index <= 0) return;
+
+  const arr = currentProject.sessions;
+  [arr[index - 1], arr[index]] = [arr[index], arr[index - 1]];
+
+  if (currentProject.currentSessionIndex === index) {
+    currentProject.currentSessionIndex = index - 1;
+  } else if (currentProject.currentSessionIndex === index - 1) {
+    currentProject.currentSessionIndex = index;
+  }
+
+  await selectSong(currentProject.currentSessionIndex);
+}
+
+async function moveSongDown(index) {
+  const arr = currentProject.sessions;
+  if (index >= arr.length - 1) return;
+
+  [arr[index], arr[index + 1]] = [arr[index + 1], arr[index]];
+
+  if (currentProject.currentSessionIndex === index) {
+    currentProject.currentSessionIndex = index + 1;
+  } else if (currentProject.currentSessionIndex === index + 1) {
+    currentProject.currentSessionIndex = index;
+  }
+
+  await selectSong(currentProject.currentSessionIndex);
+}
+
+async function addSong() {
+  const songName = "Song " + (currentProject.sessions.length + 1);
+  currentProject.sessions.push(createEmptySession(songName));
+  await selectSong(currentProject.sessions.length - 1);
+}
+
+async function duplicateSong(index) {
+  const copy = JSON.parse(JSON.stringify(currentProject.sessions[index]));
+  copy.name = (copy.name || "Song") + " Copy";
+
+  copy.slots.forEach(slot => {
+    delete slot.buffer;
+  });
+
+  currentProject.sessions.splice(index + 1, 0, copy);
+  await selectSong(index + 1);
+}
+
+async function deleteSong(index) {
+  if (currentProject.sessions.length <= 1) return;
+
+  currentProject.sessions.splice(index, 1);
+
+  if (currentProject.currentSessionIndex >= currentProject.sessions.length) {
+    currentProject.currentSessionIndex = currentProject.sessions.length - 1;
+  }
+
+  await selectSong(currentProject.currentSessionIndex);
+}
+
+function renderBackingTrackPanel() {
+  if (!currentSession) {
+    backingTrackPanel.innerHTML = "";
+    return;
+  }
+
+  if (!currentSession.backingTrack) {
+    currentSession.backingTrack = {
+      fileName: "",
+      volume: 1,
+      file: null,
+      url: ""
+    };
+  }
+
+  const bt = currentSession.backingTrack;
+
+  backingTrackPanel.innerHTML = `
+    <div style="border:1px solid #999; padding:10px; margin-bottom:12px;">
+      <h3>Backing Track</h3>
+
+      <div id="backingDropZone" style="border:2px dashed #888; padding:12px; margin-bottom:10px;">
+        ${bt.fileName || "Drop backing track here"}
+      </div>
+
+      <label>
+        Volume:
+        <input
+          type="number"
+          step="0.01"
+          min="0"
+          max="1"
+          value="${bt.volume ?? 1}"
+          onchange="setBackingTrackVolume(this.value)"
+        >
+      </label>
+
+      <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+        <button onclick="playBackingTrack()">Play</button>
+        <button onclick="pauseBackingTrack()">Pause</button>
+        <button onclick="stopBackingTrack()">Stop</button>
+        <button onclick="clearBackingTrack()">Clear</button>
+      </div>
+    </div>
+  `;
+
+  const dropZone = document.getElementById("backingDropZone");
+
+  dropZone.ondragover = (e) => {
+    e.preventDefault();
+    dropZone.style.background = "#ddd";
+  };
+
+  dropZone.ondragleave = () => {
+    dropZone.style.background = "";
+  };
+
+  dropZone.ondrop = async (e) => {
+    e.preventDefault();
+    dropZone.style.background = "";
+
+    const file = e.dataTransfer.files[0];
+    if (!file) return;
+
+    await handleBackingTrackDrop(file);
+  };
+}
+
+async function handleBackingTrackDrop(file) {
+  if (!currentSession) return;
+
+  if (currentSession.backingTrack?.url) {
+    URL.revokeObjectURL(currentSession.backingTrack.url);
+  }
+
+  currentSession.backingTrack = {
+    fileName: file.name,
+    volume: currentSession.backingTrack?.volume ?? 1,
+    file,
+    url: URL.createObjectURL(file)
+  };
+
+  backingPlayer.src = currentSession.backingTrack.url;
+  backingPlayer.volume = currentSession.backingTrack.volume ?? 1;
+
+  renderBackingTrackPanel();
+}
+
+function setBackingTrackVolume(value) {
+  if (!currentSession?.backingTrack) return;
+
+  currentSession.backingTrack.volume = +value;
+  backingPlayer.volume = +value;
+}
+
+function playBackingTrack() {
+  if (!backingPlayer.src) return;
+  backingPlayer.play();
+}
+
+function pauseBackingTrack() {
+  backingPlayer.pause();
+}
+
+function stopBackingTrack() {
+  backingPlayer.pause();
+  backingPlayer.currentTime = 0;
+}
+
+function clearBackingTrack() {
+  if (!currentSession?.backingTrack) return;
+
+  if (currentSession.backingTrack.url) {
+    URL.revokeObjectURL(currentSession.backingTrack.url);
+  }
+
+  currentSession.backingTrack = {
+    fileName: "",
+    volume: 1,
+    file: null,
+    url: ""
+  };
+
+  backingPlayer.pause();
+  backingPlayer.removeAttribute("src");
+  backingPlayer.load();
+
+  renderBackingTrackPanel();
+}
+
+function loadBackingTrackForCurrentSong() {
+  backingPlayer.pause();
+  backingPlayer.currentTime = 0;
+
+  if (!currentSession?.backingTrack?.url) {
+    backingPlayer.removeAttribute("src");
+    backingPlayer.load();
+    return;
+  }
+
+  backingPlayer.src = currentSession.backingTrack.url;
+  backingPlayer.volume = currentSession.backingTrack.volume ?? 1;
+}
+
+function findNearestZeroCrossing(buffer, timeInSeconds, searchWindowMs = 20) {
+  if (!buffer) return timeInSeconds;
+
+  const sampleRate = buffer.sampleRate;
+  const data = buffer.getChannelData(0);
+
+  const centerIndex = Math.floor(timeInSeconds * sampleRate);
+  const windowSize = Math.floor((searchWindowMs / 1000) * sampleRate);
+
+  let bestIndex = centerIndex;
+  let bestDistance = Infinity;
+
+  const start = Math.max(1, centerIndex - windowSize);
+  const end = Math.min(data.length - 1, centerIndex + windowSize);
+
+  for (let i = start; i < end; i++) {
+    const a = data[i - 1];
+    const b = data[i];
+
+    if ((a <= 0 && b > 0) || (a >= 0 && b < 0)) {
+      const distance = Math.abs(i - centerIndex);
+
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestIndex = i;
+      }
+    }
+  }
+
+  return bestIndex / sampleRate;
+}
+
+function snapLoopStart(slotIndex, inputEl) {
+  const slot = currentSession.slots[slotIndex];
+  if (!slot?.buffer) return;
+
+  let value = parseFloat(inputEl.value);
+  if (!isFinite(value)) value = 0;
+
+  value = Math.max(0, Math.min(value, slot.buffer.duration));
+
+  const snapped = findNearestZeroCrossing(slot.buffer, value);
+
+  slot.loopStart = snapped;
+
+  if (slot.loopEnd < slot.loopStart) {
+    slot.loopEnd = slot.loopStart;
+  }
+
+  inputEl.value = snapped.toFixed(4);
+  renderSlots();
+}
+
+function snapLoopEnd(slotIndex, inputEl) {
+  const slot = currentSession.slots[slotIndex];
+  if (!slot?.buffer) return;
+
+  let value = parseFloat(inputEl.value);
+  if (!isFinite(value)) value = slot.buffer.duration;
+
+  value = Math.max(0, Math.min(value, slot.buffer.duration));
+
+  const snapped = findNearestZeroCrossing(slot.buffer, value);
+
+  slot.loopEnd = Math.max(snapped, slot.loopStart || 0);
+
+  inputEl.value = slot.loopEnd.toFixed(4);
+  renderSlots();
+}
+  </script>
+
+</body>
+</html>

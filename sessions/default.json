@@ -1,0 +1,31 @@
+{
+  "name": "Default",
+  "masterVolume": 0.8,
+  "slots": [
+    {
+      "sample": "",
+      "playbackMode":"oneshot",
+      "loopStart":0,
+      "loopEnd":1,
+      "rootNote": 60,
+      "startKey": 0,
+      "endKey": 127,
+      "velocityDepth":1,
+      "velMin": 0,
+      "velMax": 127,
+      "attack": 0.01,
+      "decay":0,
+      "sustainLevel":1,
+      "release": 0.3,
+      "velocityStartDepth":0,
+      "transpose": 0,
+      "volume": 1,
+      "pitchbendRange": 2,
+      "midiDelay": 0,
+      "vibratoRate": 5,        
+      "vibratoDepth": 0,       
+      "vibratoModDepth": 1,    
+      "vibratoFade": 0.3
+    }
+  ]
+}
