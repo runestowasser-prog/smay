@@ -276,7 +276,7 @@ This makes sets:
 ## 🎹 Controls
 
 - MIDI input supported
-- Computer keyboard supported (QWERTY → piano)
+- Computer keyboard supported (ZXCVB → piano)
 - Pitch bend via keyboard arrows (optional)
 
 ---
