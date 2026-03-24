@@ -138,13 +138,14 @@ const deleteSessionBtn = document.getElementById("deleteSessionBtn");
             `<option value="${s}" ${s===slot.playbackMode?'selected':''}>${s}</option>`
           ).join("")}
         </select>
-        <label>Loop Start:
+<label>Loop Start:
   <input
     type="number"
     min="0"
-    step="0.1"
+    step="0.001"
     value="${slot.loopStart ?? 0}"
     onchange="snapLoopStart(${slotIndex}, this)"
+    onkeydown="handleLoopInputKeydown(event, ${slotIndex}, 'loopStart', this)"
   >
 </label>
 
@@ -152,9 +153,10 @@ const deleteSessionBtn = document.getElementById("deleteSessionBtn");
   <input
     type="number"
     min="0"
-    step="0.1"
+    step="0.001"
     value="${slot.loopEnd ?? 0}"
     onchange="snapLoopEnd(${slotIndex}, this)"
+    onkeydown="handleLoopInputKeydown(event, ${slotIndex}, 'loopEnd', this)"
   >
 </label>
         <label>Root Note: <input type="number" min="0" max="127" value="${slot.rootNote}" onchange="currentSession.slots[${slotIndex}].rootNote=+this.value"></label>
@@ -258,6 +260,7 @@ const deleteSessionBtn = document.getElementById("deleteSessionBtn");
         attack: 0.01,
         decay: 0,
         sustainLevel: 1,
+		velocityStartDepth:0,
         release: 0.3,
         transpose: 0,
         volume: 1,
@@ -608,9 +611,9 @@ async function loadProject(file) {
     v: 5, g: 6, b: 7, h: 8, n: 9,
     j: 10, m: 11, ",": 12,
 
-    q: 12, "2": 13, w: 14, "3": 15,
-    e: 16, r: 17, "5": 18, t: 19,
-    "6": 20, y: 21, "7": 22, u: 23
+  //  q: 12, "2": 13, w: 14, "3": 15,
+  //  e: 16, r: 17, "5": 18, t: 19,
+  //  "6": 20, y: 21, "7": 22, u: 23
   };
 
   const heldKeys = new Set();
@@ -1076,6 +1079,90 @@ function snapLoopEnd(slotIndex, inputEl) {
 
   inputEl.value = slot.loopEnd.toFixed(4);
   renderSlots();
+}
+
+function findNextZeroCrossing(buffer, timeInSeconds) {
+  if (!buffer) return timeInSeconds;
+
+  const sampleRate = buffer.sampleRate;
+  const data = buffer.getChannelData(0);
+  const startIndex = Math.max(1, Math.floor(timeInSeconds * sampleRate));
+
+  for (let i = startIndex + 1; i < data.length; i++) {
+    const a = data[i - 1];
+    const b = data[i];
+
+    if ((a <= 0 && b > 0) || (a >= 0 && b < 0)) {
+      return i / sampleRate;
+    }
+  }
+
+  return timeInSeconds;
+}
+
+function findPreviousZeroCrossing(buffer, timeInSeconds) {
+  if (!buffer) return timeInSeconds;
+
+  const sampleRate = buffer.sampleRate;
+  const data = buffer.getChannelData(0);
+  const startIndex = Math.min(data.length - 1, Math.floor(timeInSeconds * sampleRate));
+
+  for (let i = startIndex - 1; i > 1; i--) {
+    const a = data[i - 1];
+    const b = data[i];
+
+    if ((a <= 0 && b > 0) || (a >= 0 && b < 0)) {
+      return i / sampleRate;
+    }
+  }
+
+  return timeInSeconds;
+}
+
+function stepLoopPoint(slotIndex, field, direction, inputEl) {
+  const slot = currentSession.slots[slotIndex];
+  if (!slot?.buffer) return;
+
+  let currentValue = parseFloat(inputEl.value);
+  if (!isFinite(currentValue)) {
+    currentValue = field === "loopEnd" ? slot.buffer.duration : 0;
+  }
+
+  let stepped;
+
+  if (direction > 0) {
+    stepped = findNextZeroCrossing(slot.buffer, currentValue);
+  } else {
+    stepped = findPreviousZeroCrossing(slot.buffer, currentValue);
+  }
+
+  stepped = Math.max(0, Math.min(stepped, slot.buffer.duration));
+
+  if (field === "loopStart") {
+    slot.loopStart = stepped;
+    if (slot.loopEnd < slot.loopStart) {
+      slot.loopEnd = slot.loopStart;
+    }
+  }
+
+  if (field === "loopEnd") {
+    slot.loopEnd = Math.max(stepped, slot.loopStart || 0);
+  }
+
+  inputEl.value = stepped.toFixed(4);
+  renderSlots();
+}
+
+function handleLoopInputKeydown(event, slotIndex, field, inputEl) {
+  if (event.key === "ArrowUp") {
+    event.preventDefault();
+    stepLoopPoint(slotIndex, field, 1, inputEl);
+  }
+
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    stepLoopPoint(slotIndex, field, -1, inputEl);
+  }
 }
   </script>
 
