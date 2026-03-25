@@ -6,7 +6,9 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-
+<button id="panicBtn" onclick="engine.stopAllVoices(0.03)">
+  PANIC
+</button>
   <h2>SAMPLES, MIDI & YOU</h2>
   <label>Set Name:
   <input id="projectNameInput" type="text" value="My Set">
@@ -76,6 +78,12 @@ const addSongBtn = document.getElementById("addSongBtn");
 
      console.log("Session loaded:", currentSession.name);
     };
+	
+	window.addEventListener("keydown", (e) => {
+	  if (e.key === "Escape") {
+		engine.stopAllVoices(0.02);
+	  }
+	});
 
     document.getElementById("initMIDI").onclick = async () => {
 
@@ -159,6 +167,7 @@ const deleteSessionBtn = document.getElementById("deleteSessionBtn");
     onkeydown="handleLoopInputKeydown(event, ${slotIndex}, 'loopEnd', this)"
   >
 </label>
+		<label>Crossfade: <input type="number" min="0" value="${slot.crossfadeMs}" onchange="currentSession.slots[${slotIndex}].crossfadeMs=+this.value"></label>	
         <label>Root Note: <input type="number" min="0" max="127" value="${slot.rootNote}" onchange="currentSession.slots[${slotIndex}].rootNote=+this.value"></label>
         <label>Key Min: <input type="number" min="0" max="127" value="${slot.startKey}" onchange="currentSession.slots[${slotIndex}].startKey=+this.value"></label>
         <label>Key Max: <input type="number" min="0" max="127" value="${slot.endKey}" onchange="currentSession.slots[${slotIndex}].endKey=+this.value"></label>
@@ -251,6 +260,7 @@ const deleteSessionBtn = document.getElementById("deleteSessionBtn");
         playbackMode: "oneshot",
         loopStart: 0,
         loopEnd: 1,
+		crossfadeMs:0,
         rootNote: 60,
         startKey: 0,
         endKey: 127,
@@ -270,6 +280,7 @@ const deleteSessionBtn = document.getElementById("deleteSessionBtn");
         vibratoDepth: 0,
         vibratoModDepth: 0,
         vibratoFade: 0,
+		delayedPitchBend: 0,
         buffer: null
       };
 
@@ -483,8 +494,6 @@ async function loadProject(file) {
   if (!engine.audioCtx) {
     await engine.initAudio();
   }
-  await ensureAudio();
-      await ensureMIDI();
 
   const zip = await JSZip.loadAsync(file);
 
@@ -497,9 +506,8 @@ async function loadProject(file) {
   const projectText = await projectFile.async("string");
   const loadedProject = JSON.parse(projectText);
 
-  // nulstil library
-  sampleLibrary = {};
-  engine.audioCache = {};
+  const importedSampleLibrary = {};
+  const importedAudioCache = {};
 
   // load samples
   const sampleFolder = zip.folder("samples");
@@ -519,12 +527,12 @@ async function loadProject(file) {
         const audioBuffer = await engine.audioCtx.decodeAudioData(decodeBuffer);
         const blob = new Blob([arrayBuffer]);
 
-        sampleLibrary[fileName] = {
+        importedSampleLibrary[fileName] = {
           file: blob,
           buffer: audioBuffer
         };
 
-        engine.audioCache[fileName] = audioBuffer;
+        importedAudioCache[fileName] = audioBuffer;
       } catch (err) {
         console.error("Could not decode sample:", fileName, err);
       }
@@ -533,7 +541,7 @@ async function loadProject(file) {
 
   // load backingtracks
   const backingFolder = zip.folder("backingtracks");
-  const backingTrackFiles = {};
+  const importedBackingTracks = {};
 
   if (backingFolder) {
     const backingEntries = Object.keys(backingFolder.files);
@@ -547,50 +555,67 @@ async function loadProject(file) {
 
       const blob = await zipEntry.async("blob");
 
-      backingTrackFiles[fileName] = {
+      importedBackingTracks[fileName] = {
         file: blob,
         url: URL.createObjectURL(blob)
       };
     }
   }
 
-  // bind samples + backingtracks tilbage
-  loadedProject.sessions.forEach(session => {
-    session.slots.forEach(slot => {
+  // hvis der ikke er et aktivt project endnu, så lav et
+  if (!currentProject || !currentProject.sessions) {
+    currentProject = {
+      name: loadedProject.name || "My Set",
+      sessions: [],
+      currentSessionIndex: 0
+    };
+  }
+
+  // merge samples ind i global library
+  for (const sampleName in importedSampleLibrary) {
+    if (!sampleLibrary[sampleName]) {
+      sampleLibrary[sampleName] = importedSampleLibrary[sampleName];
+      engine.audioCache[sampleName] = importedAudioCache[sampleName];
+    }
+  }
+
+  // klargør importerede songs
+  const importedSessions = (loadedProject.sessions || []).map(session => {
+    const copy = JSON.parse(JSON.stringify(session));
+
+    copy.slots.forEach(slot => {
       slot.buffer = sampleLibrary[slot.sample]?.buffer || null;
     });
 
-    if (!session.backingTrack) {
-      session.backingTrack = {
+    if (!copy.backingTrack) {
+      copy.backingTrack = {
         fileName: "",
         volume: 1,
         file: null,
         url: ""
       };
     } else {
-      const fileName = session.backingTrack.fileName;
-      if (fileName && backingTrackFiles[fileName]) {
-        session.backingTrack.file = backingTrackFiles[fileName].file;
-        session.backingTrack.url = backingTrackFiles[fileName].url;
+      const fileName = copy.backingTrack.fileName;
+      if (fileName && importedBackingTracks[fileName]) {
+        copy.backingTrack.file = importedBackingTracks[fileName].file;
+        copy.backingTrack.url = importedBackingTracks[fileName].url;
       } else {
-        session.backingTrack.file = null;
-        session.backingTrack.url = "";
+        copy.backingTrack.file = null;
+        copy.backingTrack.url = "";
       }
     }
+
+    return copy;
   });
 
-  currentProject = {
-    name: loadedProject.name || "Loaded Set",
-    sessions: loadedProject.sessions || [],
-    currentSessionIndex: loadedProject.currentSessionIndex || 0
-  };
+  const firstImportedIndex = currentProject.sessions.length;
 
-  currentSession =
-    currentProject.sessions[currentProject.currentSessionIndex] ||
-    currentProject.sessions[0] ||
-    null;
+  currentProject.sessions.push(...importedSessions);
 
-  if (currentSession) {
+  // vælg første importerede song
+  if (currentProject.sessions.length > 0) {
+    currentProject.currentSessionIndex = firstImportedIndex;
+    currentSession = currentProject.sessions[currentProject.currentSessionIndex];
     await engine.load(currentSession);
     loadBackingTrackForCurrentSong();
   }
@@ -599,9 +624,8 @@ async function loadProject(file) {
   renderBackingTrackPanel();
   renderSlots();
 
-  console.log("Project loaded:", currentProject.name);
+  console.log("Imported songs from set:", loadedProject.name);
 }
-
   function enableComputerKeyboard(engine, options = {}) {
   let baseNote = options.baseNote ?? 60;
   const target = options.target ?? window;
@@ -791,6 +815,11 @@ function renderSongList() {
 }
 
 async function selectSong(index) {
+	
+  if (engine.audioCtx) {
+    engine.stopAllVoices(0.05);
+  }
+  
   currentProject.currentSessionIndex = index;
   currentSession = currentProject.sessions[index];
 

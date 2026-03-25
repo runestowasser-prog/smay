@@ -97,3 +97,32 @@ input, select {
     inset -1px -1px 0 rgba(0,0,0,0.35),
     0 3px 8px rgba(0,0,0,0.35);
 }
+
+#panicBtn {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+
+  z-index: 9999;
+
+  background: linear-gradient(#c0392b, #922b21);
+  color: white;
+  border: 1px solid #200;
+  padding: 10px 14px;
+
+  font-weight: bold;
+  letter-spacing: 1px;
+
+  border-radius: 4px;
+
+  box-shadow:
+    0 4px 10px rgba(0,0,0,0.6),
+    inset 1px 1px 0 rgba(255,255,255,0.2),
+    inset -1px -1px 0 rgba(0,0,0,0.4);
+
+  cursor: pointer;
+}
+
+#panicBtn:hover {
+  background: linear-gradient(#e74c3c, #a93226);
+}
