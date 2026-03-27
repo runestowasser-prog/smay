@@ -190,7 +190,8 @@ setPitchBend(value14bit) {
   }
 
   handleCC(cc, value) {
-
+	  console.log("CC:"+cc+value);
+	
   if (cc === 1) { // modwheel
       this.modWheel = value;
       this.updateVibratoDepth();
@@ -203,6 +204,7 @@ setPitchBend(value14bit) {
 
 	updateVibratoDepth() {
 	  const now = this.audioCtx.currentTime;
+	  console.log("Updating vibrato", this.modWheel);
 
 	  for (let note in this.activeVoices) {
 		for (let voice of this.activeVoices[note]) {
