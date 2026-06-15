@@ -299,7 +299,7 @@ setPitchBend(value14bit) {
 		velocity,
 		effectivePitchBend,
 		scheduledTime,
-		startOffset
+		startOffset,
 	  );
 	}
 
@@ -312,19 +312,37 @@ setPitchBend(value14bit) {
 
   // 🎹 Pitch
   const pitchRatio = Math.pow(
-    2,
-    (note - slot.rootNote + (slot.transpose || 0)) / 12
-  );
+  2,
+  (note - slot.rootNote + (slot.transpose || 0)) / 12
+);
 
-  const bendRatio = Math.pow(
-    2,
-    (effectivePitchBend * (slot.pitchbendRange || 2)) / 12
-  );
+const bendRatio = Math.pow(
+  2,
+  (effectivePitchBend * (slot.pitchbendRange || 2)) / 12
+);
 
+const targetPlaybackRate = pitchRatio * bendRatio;
+const glideTime = slot.glide || 0;
+
+if (glideTime > 0 && slot.lastPlaybackRate != null) {
   source.playbackRate.setValueAtTime(
-    pitchRatio * bendRatio,
+    slot.lastPlaybackRate,
     scheduledTime
   );
+
+  source.playbackRate.linearRampToValueAtTime(
+    targetPlaybackRate,
+    scheduledTime + glideTime
+  );
+} else {
+  source.playbackRate.setValueAtTime(
+    targetPlaybackRate,
+    scheduledTime
+  );
+}
+
+// gem til næste note
+slot.lastPlaybackRate = targetPlaybackRate;
 
   // 🎚 Velocity + volume
   const velNorm = velocity / 127;
@@ -359,7 +377,7 @@ setPitchBend(value14bit) {
 
   source.connect(gain).connect(this.masterGain);
 
-  const voice = { source, gain, slot, currentPitchBend: effectivePitchBend };
+  const voice = { source, gain, slot, currentPitchBend: effectivePitchBend, playbackRate: targetPlaybackRate };
 
   // 🎛 Vibrato
   if ((slot.vibratoDepth || 0) !== 0 || (slot.vibratoModDepth || 0) !== 0) {
@@ -483,28 +501,37 @@ setPitchBend(value14bit) {
   }
 
   // pitch
-  const pitchRatio = Math.pow(
-    2,
-    (note - slot.rootNote + (slot.transpose || 0)) / 12
-  );
+const pitchRatio = Math.pow(
+  2,
+  (note - slot.rootNote + (slot.transpose || 0)) / 12
+);
 
-  const bendRatio = Math.pow(
-    2,
-    (pitchBendValue * (slot.pitchbendRange || 2)) / 12
-  );
+const bendRatio = Math.pow(
+  2,
+  (pitchBendValue * (slot.pitchbendRange || 2)) / 12
+);
 
-  const playbackRate = pitchRatio * bendRatio;
+const targetPlaybackRate = pitchRatio * bendRatio;
+const glideTime = slot.glide || 0;
+
+const initialPlaybackRate =
+  (glideTime > 0 && slot.lastPlaybackRate != null)
+    ? slot.lastPlaybackRate
+    : targetPlaybackRate;
+
+// gem til næste note
+slot.lastPlaybackRate = targetPlaybackRate;
 
   // loop timing
   const bufferLoopLength = loopEnd - loopStart;
-  const realLoopLength = bufferLoopLength / playbackRate;
+  const realLoopLength = bufferLoopLength / targetPlaybackRate;
 
   const crossfadeBufferSec = Math.min(
     (slot.crossfadeMs || 0) / 1000,
     bufferLoopLength * 0.45
   );
 
-  const crossfadeRealSec = crossfadeBufferSec / playbackRate;
+  const crossfadeRealSec = crossfadeBufferSec / targetPlaybackRate;
 
   // velocity
   const velNorm = velocity / 127;
@@ -549,7 +576,7 @@ setPitchBend(value14bit) {
     gain: voiceGain,
     sources: [],
     timers: [],
-    playbackRate,
+    playbackRate: targetPlaybackRate,
     finalGain,
     lfo: null,
     lfoGain: null,
@@ -584,7 +611,15 @@ setPitchBend(value14bit) {
   lfo.start(scheduledTime);
 }
 
-  const makeSegment = (segmentStartTime, offsetInBuffer, bufferDuration, fadeInBuffer, fadeOutBuffer) => {
+  const makeSegment = (
+  segmentStartTime, 
+  offsetInBuffer, 
+  bufferDuration, 
+  fadeInBuffer, 
+  fadeOutBuffer,
+  startRate = null,
+  endRate = null
+  ) => {
     const source = this.audioCtx.createBufferSource();
     const segGain = this.audioCtx.createGain();
 
@@ -611,7 +646,15 @@ setPitchBend(value14bit) {
 
 	const livePlaybackRate = livePitchRatio * liveBendRatio;
 
-	source.playbackRate.setValueAtTime(livePlaybackRate, segmentStartTime);
+	if (startRate != null && endRate != null && glideTime > 0) {
+	  source.playbackRate.setValueAtTime(startRate, segmentStartTime);
+	  source.playbackRate.linearRampToValueAtTime(
+		endRate,
+		segmentStartTime + glideTime
+	  );
+	} else {
+	  source.playbackRate.setValueAtTime(livePlaybackRate, segmentStartTime);
+	}
 
     source.connect(segGain);
     segGain.connect(voiceGain);
@@ -684,14 +727,16 @@ setPitchBend(value14bit) {
   }
 
   const firstBufferLength = loopEnd - firstOffset;
-  const firstRealLength = firstBufferLength / playbackRate;
+  const firstRealLength = firstBufferLength / targetPlaybackRate;
 
   makeSegment(
     scheduledTime,
     firstOffset,
     firstBufferLength,
     0,
-    crossfadeBufferSec
+    crossfadeBufferSec,
+	initialPlaybackRate,
+	targetPlaybackRate
   );
 
   const firstLoopStartTime = scheduledTime + firstRealLength - crossfadeRealSec;

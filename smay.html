@@ -187,7 +187,7 @@ const deleteSessionBtn = document.getElementById("deleteSessionBtn");
         <label>Vibrato Depth: <input type="number" value="${slot.vibratoDepth}" onchange="currentSession.slots[${slotIndex}].vibratoDepth=+this.value"></label>
         <label>Vibrato Mod Depth: <input type="number" value="${slot.vibratoModDepth}" onchange="currentSession.slots[${slotIndex}].vibratoModDepth=+this.value"></label>
         <label>Vibrato Fade: <input type="number" value="${slot.vibratoFade}" onchange="currentSession.slots[${slotIndex}].vibratoFade=+this.value"></label>
-   
+		<label>Glide:<input type="number" step="0.01" value="${slot.glide ?? 0}" onchange="currentSession.slots[${slotIndex}].glide=+this.value"></label>
         <button onclick="removeSlot(${slotIndex})">Delete Slot</button>
       `;
       
@@ -281,6 +281,7 @@ const deleteSessionBtn = document.getElementById("deleteSessionBtn");
         vibratoModDepth: 0,
         vibratoFade: 0,
 		delayedPitchBend: 0,
+		glide: 0,
         buffer: null
       };
 
@@ -479,7 +480,7 @@ const loadProjectBtn = document.getElementById("loadProjectBtn");
 const loadProjectInput = document.getElementById("loadProjectInput");
 
 loadProjectBtn.onclick = () => {
-  
+
   loadProjectInput.click();
 };
 
@@ -488,6 +489,9 @@ loadProjectInput.onchange = async (e) => {
   if (!file) return;
 
   await loadProject(file);
+        await ensureAudio();
+      await ensureMIDI();
+  
 };
 
 async function loadProject(file) {
@@ -517,6 +521,8 @@ async function loadProject(file) {
     for (const path of sampleEntries) {
       const zipEntry = sampleFolder.files[path];
       if (zipEntry.dir) continue;
+
+		if(!path.startsWith("samples/")) continue;
 
       const fileName = path.split("/").pop();
       if (!fileName) continue;
@@ -619,7 +625,7 @@ async function loadProject(file) {
     await engine.load(currentSession);
     loadBackingTrackForCurrentSong();
   }
-
+  
   renderSongList();
   renderBackingTrackPanel();
   renderSlots();
